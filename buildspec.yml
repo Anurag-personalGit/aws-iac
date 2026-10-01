@@ -1,0 +1,27 @@
+version: 0.2
+
+phases:
+  install:
+    commands:
+      - echo "Installing required tools..."
+      - aws --version
+      - echo "CodeBuild environment ready"
+
+  pre_build:
+    commands:
+      - echo "Starting CloudFormation validation..."
+      - echo "Validating template.yaml"
+
+  build:
+    commands:
+      - aws cloudformation validate-template --template-body file://template.yaml
+      - echo "CloudFormation template validation successful"
+
+  post_build:
+    commands:
+      - echo "Build completed successfully"
+      - echo "Preparing CloudFormation deployment artifact"
+
+artifacts:
+  files:
+    - template.yaml
