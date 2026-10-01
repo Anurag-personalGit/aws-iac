@@ -1,0 +1,869 @@
+git add template.yamlAWSTemplateFormatVersion: '2010-09-09'
+
+Description: Project 4 - Networking Foundation
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+
+      - Label:
+          default: "Environment Configuration"
+        Parameters:
+          - EnvironmentName
+
+      - Label:
+          default: "Network Configuration"
+        Parameters:
+          - VpcCIDR
+          - PublicSubnet1CIDR
+          - PublicSubnet2CIDR
+          - PrivateSubnet1CIDR
+          - PrivateSubnet2CIDR
+      
+      - Label:
+          default: "EC2 Configuration"
+        Parameters:
+          - InstanceType
+          - KeyPairName
+      
+      - Label:
+          default: "Security Configuration"
+        Parameters:
+          - SSHLocation
+      
+    ParameterLabels:
+      EnvironmentName:
+        default: "Environment"
+
+      VpcCIDR:
+        default: "VPC CIDR Block"
+
+      PublicSubnet1CIDR:
+        default: "Public Subnet 1 CIDR"
+
+      PublicSubnet2CIDR:
+        default: "Public Subnet 2 CIDR"
+      
+      PrivateSubnet1CIDR:
+        default: "Private Subnet 1 CIDR"
+
+      PrivateSubnet2CIDR:
+        default: "Private Subnet 2 CIDR"
+
+      InstanceType:
+        default: "EC2 Instance Type"
+
+      KeyPairName:
+        default: "EC2 Key Pair"
+
+      SSHLocation:
+        default: "SSH Allowed CIDR"
+
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: Dev
+    AllowedValues:
+      - Dev
+      - Test
+      - UAT
+      - Prod
+    Description: Environment Name
+
+  VpcCIDR:
+    Type: String
+    Default: 10.0.0.0/16
+    Description: CIDR block for VPC
+
+  PublicSubnet1CIDR:
+    Type: String
+    Default: 10.0.1.0/24
+    Description: CIDR for Public Subnet 1
+
+  PublicSubnet2CIDR:
+    Type: String
+    Default: 10.0.2.0/24
+    Description: CIDR for Public Subnet 2
+  
+  PrivateSubnet1CIDR:
+    Type: String
+    Default: 10.0.3.0/24
+    Description: CIDR for Private Subnet 1
+
+  PrivateSubnet2CIDR:
+    Type: String
+    Default: 10.0.4.0/24
+    Description: CIDR for Private Subnet 2
+
+  InstanceType:
+    Type: String
+    Default: t3.micro
+    AllowedValues:
+      - t3.small
+      - t3.micro
+    Description: EC2 Instance Type
+
+  KeyPairName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Existing EC2 Key Pair
+
+  SSHLocation:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: Allowed SSH CIDR
+
+  DBPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    MaxLength: 41
+    Description: Master password for RDS MySQL
+
+Mappings:
+  RegionMap:
+    ap-south-1:
+      AMI: ami-00d2dbb426772b03a
+      RegionName: Mumbai
+
+
+Conditions:
+  IsProduction: !Equals
+    - !Ref EnvironmentName
+    - Prod
+
+
+Resources:
+  ProjectVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCIDR
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-VPC"
+
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+        - Key: Project
+          Value: Project4-CloudFormation
+
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  ProjectInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-IGW"
+
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+        - Key: Project
+          Value: Project4-CloudFormation
+
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref ProjectVPC
+      InternetGatewayId: !Ref ProjectInternetGateway
+
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ProjectVPC
+      CidrBlock: !Ref PublicSubnet1CIDR
+      AvailabilityZone: ap-south-1a
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-PublicSubnet1"
+
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+        - Key: Project
+          Value: Project4-CloudFormation
+
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ProjectVPC
+      CidrBlock: !Ref PublicSubnet2CIDR
+      AvailabilityZone: ap-south-1b
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-PublicSubnet2"
+
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+        - Key: Project
+          Value: Project4-CloudFormation
+
+        - Key: ManagedBy
+          Value: CloudFormation
+    
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ProjectVPC
+      CidrBlock: !Ref PrivateSubnet1CIDR
+      AvailabilityZone: ap-south-1a
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-PrivateSubnet1"
+
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+        - Key: Project
+          Value: Project4-CloudFormation
+
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ProjectVPC
+      CidrBlock: !Ref PrivateSubnet2CIDR
+      AvailabilityZone: ap-south-1b
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-PrivateSubnet2"
+
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+        - Key: Project
+          Value: Project4-CloudFormation
+
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  ProjectPublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref ProjectVPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-PublicRouteTable"
+
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+        - Key: Project
+          Value: Project4-CloudFormation
+
+        - Key: ManagedBy
+          Value: CloudFormation
+  
+  ProjectPrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref ProjectVPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-PrivateRouteTable"
+
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+        - Key: Project
+          Value: Project4-CloudFormation
+
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  PublicDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref ProjectPublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref ProjectInternetGateway
+
+  PublicSubnetAAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      RouteTableId: !Ref ProjectPublicRouteTable
+
+  PublicSubnetBAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetB
+      RouteTableId: !Ref ProjectPublicRouteTable
+  
+  PrivateSubnetAAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetA
+      RouteTableId: !Ref ProjectPrivateRouteTable
+
+  PrivateSubnetBAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetB
+      RouteTableId: !Ref ProjectPrivateRouteTable
+
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security Group for ALB
+      VpcId: !Ref ProjectVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          ToPort: 80
+          FromPort: 80
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-ALB-SG"
+
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+        - Key: Project
+          Value: Project4-CloudFormation
+
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  EC2ScurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security Group for Ec2
+      VpcId: !Ref ProjectVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref SSHLocation
+
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-Web-SG"
+
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+        - Key: Project
+          Value: Project4-CloudFormation
+
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security Group for RDS MySQL
+      VpcId: !Ref ProjectVPC
+
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref EC2ScurityGroup
+
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-RDS-SG"
+
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+        - Key: Project
+          Value: Project4-CloudFormation
+
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  EC2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-EC2-Role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: ReadProject4DatabaseSecret
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                - secretsmanager:GetSecretValue
+                Resource: !Ref Project4DBSecret
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-EC2Role"
+
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+        - Key: Project
+          Value: Project4-CloudFormation
+
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub "${AWS::StackName}-EC2-Profile"
+      Roles:
+        - !Ref EC2Role
+
+  Project4DBSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${AWS::StackName}/database"
+      Description: Project 4 RDS database credentials
+      SecretString: !Sub |
+        {
+          "username": "admin",
+          "password": "REPLACE_WITH_YOUR_RDS_PASSWORD",
+          "host": "project4-db.cdsmumsgw993.ap-south-1.rds.amazonaws.com",
+          "port": 3306,
+          "dbname": "project4app"
+        }
+      Tags:
+        - Key: Project
+          Value: Project4-CloudFormation
+        - Key: ManagedBy
+          Value: CloudFormation
+  
+# =========================
+# Load Balancing
+# =========================
+  Project4ALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: Project4-ALB
+      Scheme: internet-facing
+      Type: application
+      IpAddressType: ipv4
+
+      Subnets:
+        - !Ref PublicSubnetA
+        - !Ref PublicSubnetB
+
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+
+      Tags:
+        - Key: Name
+          Value: Project4-ALB
+
+        - Key: Project
+          Value: Project4-CloudFormation
+
+        - Key: ManagedBy
+          Value: CloudFormation
+  
+  Project4TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: Project4-TG
+      Protocol: HTTP
+      Port: 80
+      TargetType: instance
+
+      VpcId: !Ref ProjectVPC
+
+      HealthCheckEnabled: true
+      HealthCheckProtocol: HTTP
+      HealthCheckPort: traffic-port
+      HealthCheckPath: /
+
+      Tags:
+        - Key: Name
+          Value: Project4-TargetGroup
+
+        - Key: Project
+          Value: Project4-CloudFormation
+
+        - Key: ManagedBy
+          Value: CloudFormation
+    
+  Project4ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LoadBalancerArn: !Ref Project4ALB
+      Port: 80
+      Protocol: HTTP
+
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref Project4TargetGroup
+
+# =========================
+# Compute - Launch Template
+# =========================
+  Project4LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+
+    Metadata:
+      AWS::CloudFormation::Init:
+        config:
+
+          packages:
+            yum:
+              nginx: []
+              python3: []
+              python3-pip: []
+
+          files:
+            /usr/share/nginx/html/index.html:
+              content: |
+                <html>
+                <body>
+                <h1>Project 4 - CloudFormation ASG Instance</h1>
+                <p>Managed through CloudFormation Init</p>
+                </body>
+                </html>
+              mode: '000644'
+              owner: root
+              group: root
+
+            /home/ec2-user/app.py:
+              content: |
+                import os
+                import json
+                import boto3
+                from flask import Flask
+                import mysql.connector
+
+                app = Flask(__name__)
+
+                DB_SECRET_NAME = os.environ["DB_SECRET_NAME"]
+                AWS_REGION = os.environ.get("AWS_REGION", "ap-south-1")
+
+                secrets_client = boto3.client(
+                  "secretsmanager",
+                  region_name=AWS_REGION
+                )
+
+                def get_db_credentials():
+                  response = secrets_client.get_secret_value(
+                    SecretId=DB_SECRET_NAME
+                  )
+
+                  secret = json.loads(response["SecretString"])
+                  return secret
+
+                @app.route("/")
+                def home():
+                    db_credentials = get_db_credentials()
+                    connection = mysql.connector.connect(
+                        host=db_credentials["host"],
+                        user=db_credentials["username"],
+                        password=db_credentials["password"],
+                        database=db_credentials["dbname"],
+                        port=int(db_credentials.get("port", 3306))
+                    )
+                    cursor = connection.cursor()
+                    cursor.execute("SELECT id, name, email FROM users")
+                    users = cursor.fetchall()
+                    cursor.close()
+                    connection.close()
+                    html = "<h1>Project 4 Application</h1>"
+                    html += "<h2>Users from RDS:</h2>"
+                    html += "<ul>"
+                    for user in users:
+                      html += f"<li>{user[0]} - {user[1]} - {user[2]}</li>"
+                    html += "</ul>"
+                    return html
+                if __name__ == "__main__":
+                    app.run(host="0.0.0.0", port=5000)
+              mode: '000644'
+              owner: ec2-user
+              group: ec2-user
+
+            /etc/systemd/system/project4-flask.service:
+              content: !Sub |
+                [Unit]
+                Description=Project 4 Flask Application
+                After=network-online.target
+                Wants=network-online.target
+
+                [Service]
+                User=ec2-user
+                WorkingDirectory=/home/ec2-user
+
+                Environment="DB_SECRET_NAME=${AWS::StackName}/database"
+                Environment="AWS_REGION=${AWS::Region}"
+
+                ExecStart=/home/ec2-user/project4-env/bin/python /home/ec2-user/app.py
+
+                Restart=always
+                RestartSec=5
+
+                [Install]
+                WantedBy=multi-user.target
+              mode: '000644'
+              owner: root
+              group: root
+
+            /etc/nginx/conf.d/project4-app.conf:
+              content: |
+                server {
+                    listen 80;
+                    listen [::]:80;
+
+                    server_name _;
+
+                    location / {
+                      proxy_pass http://127.0.0.1:5000;
+
+                        proxy_set_header Host $host;
+                        proxy_set_header X-Real-IP $remote_addr;
+                        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                        proxy_set_header X-Forwarded-Proto $scheme;
+                    }
+                }
+              mode: '0644'
+              owner: root
+              group: root
+
+            /etc/systemd/system/nginx.service.d/project4-flask.conf:
+              content: |
+                [Unit]
+                Requires=project4-flask.service
+                After=project4-flask.service
+              mode: '0644'
+              owner: root
+              group: root
+
+          commands:
+            01_create_virtualenv:
+              command: |
+                python3 -m venv /home/ec2-user/project4-env
+
+            02_install_python_dependencies:
+              command: |
+                /home/ec2-user/project4-env/bin/pip install Flask mysql-connector-python boto3
+
+            03_set_permissions:
+              command: |
+                chown -R ec2-user:ec2-user /home/ec2-user/project4-env /home/ec2-user/app.py
+
+            04_remove_default_nginx_server:
+              command: |
+                python3 - <<'PY'
+                path = "/etc/nginx/nginx.conf"
+
+                with open(path, "r") as f:
+                    content = f.read()
+
+                start = content.find("\n    server {\n")
+                end = content.find("\n# Settings for a TLS enabled server.\n", start)
+
+                if start != -1 and end != -1:
+                    content = content[:start] + content[end:]
+
+                with open(path, "w") as f:
+                    f.write(content)
+                PY
+
+            05_validate_nginx:
+              command: |
+                nginx -t
+
+            06_start_flask:
+              command: |
+                systemctl enable --now project4-flask
+            
+            07_reload_systemd:
+              command: |
+                systemctl daemon-reload
+
+            08_start_nginx:
+              command: |
+                systemctl enable --now nginx
+
+          services:
+            systemd:
+              nginx:
+                enabled: true
+                ensureRunning: true
+
+              project4-flask:
+                enabled: true
+                ensureRunning: true
+
+    Properties:
+      LaunchTemplateName: Project4-WebServer-LT
+
+      LaunchTemplateData:
+        ImageId: '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}'
+
+        InstanceType: !Ref InstanceType
+
+        IamInstanceProfile:
+          Name: !Ref EC2InstanceProfile
+
+        SecurityGroupIds:
+          - !Ref EC2ScurityGroup
+
+        Monitoring:
+          Enabled: true
+
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+
+            /opt/aws/bin/cfn-init \
+              --stack ${AWS::StackName} \
+              --resource Project4LaunchTemplate \
+              --region ${AWS::Region}
+    
+  Project4AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      MinSize: 2
+      MaxSize: 4
+      DesiredCapacity: 2
+
+      VPCZoneIdentifier:
+        - !Ref PublicSubnetA
+        - !Ref PublicSubnetB
+
+      LaunchTemplate:
+        LaunchTemplateId: !Ref Project4LaunchTemplate
+        Version: !GetAtt Project4LaunchTemplate.LatestVersionNumber
+
+      TargetGroupARNs:
+        - !Ref Project4TargetGroup
+
+      HealthCheckType: ELB
+      HealthCheckGracePeriod: 300
+  
+  Project4DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Private subnet group for Project 4 RDS
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-RDS-SubnetGroup"
+
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+        - Key: Project
+          Value: Project4-CloudFormation
+
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  Project4RDS:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: project4-db
+
+      Engine: mysql
+      DBInstanceClass: db.t3.micro
+
+      AllocatedStorage: 20
+      StorageType: gp3
+
+      MasterUsername: admin
+      MasterUserPassword: !Ref DBPassword
+
+      DBSubnetGroupName: !Ref Project4DBSubnetGroup
+
+      VPCSecurityGroups:
+        - !GetAtt RDSSecurityGroup.GroupId
+
+      PubliclyAccessible: false
+
+      BackupRetentionPeriod: 1
+
+      MultiAZ: false
+
+      Tags:
+        - Key: Name
+          Value: Project4-RDS
+
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+        - Key: Project
+          Value: Project4-CloudFormation
+
+        - Key: ManagedBy
+          Value: CloudFormation
+
+Outputs:
+  VPCId:
+    Description: VPC ID
+    Value: !Ref ProjectVPC
+    Export:
+      Name: Project4-VPC-ID
+    
+  ArchitectureName:
+    Description: Environment - specific architecture name
+    Value: !Join
+      - "-"
+      - - Project 4
+        - !Ref EnvironmentName
+        - Network
+  
+  SubnetListExample:
+    Description: Demonstration of Split and Join
+    Value: !Join
+      - ","
+      - !Split
+        - ","
+        - subnet-aaa,subnet-bbb,subnet-ccc
+  
+  
+
+  
