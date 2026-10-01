@@ -1,4 +1,4 @@
-git add template.yamlAWSTemplateFormatVersion: '2010-09-09'
+AWSTemplateFormatVersion: '2010-09-09'
 
 Description: Project 4 - Networking Foundation
 
