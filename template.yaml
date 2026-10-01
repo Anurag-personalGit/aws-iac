@@ -152,6 +152,9 @@ Resources:
 
         - Key: ManagedBy
           Value: CloudFormation
+        
+        - Key: ProjectStage
+          Value: CICD-Validation
 
   ProjectInternetGateway:
     Type: AWS::EC2::InternetGateway
