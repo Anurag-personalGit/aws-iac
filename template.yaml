@@ -156,9 +156,6 @@ Resources:
         - Key: ProjectStage
           Value: CICD-Validation
 
-        - Key: PipelineTest
-          Value: ChangeSetValidation
-
   ProjectInternetGateway:
     Type: AWS::EC2::InternetGateway
     Properties:
