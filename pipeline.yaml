@@ -1,0 +1,490 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: >-
+  Project 4 - CI/CD pipeline (GitHub -> CodeBuild validate -> CloudFormation
+  change set -> manual approval -> execute) for the application stack.
+  Replaces the console-created CodePipelineStarterTemplate stack.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Source"
+        Parameters:
+          - ConnectionArn
+          - FullRepositoryId
+          - BranchName
+      - Label:
+          default: "Target application stack"
+        Parameters:
+          - AppStackName
+          - EnvironmentName
+          - KeyPairName
+      - Label:
+          default: "Pipeline"
+        Parameters:
+          - PipelineName
+          - ApprovalEmail
+
+Parameters:
+  ConnectionArn:
+    Type: String
+    Default: arn:aws:codeconnections:ap-south-1:355947670295:connection/a333c11d-ed6f-4c2f-8007-6fed25851c2e
+    Description: Existing (AVAILABLE) CodeConnections GitHub connection ARN
+
+  FullRepositoryId:
+    Type: String
+    Default: Anurag-personalGit/aws-iac
+    Description: GitHub repository in owner/repo form
+
+  BranchName:
+    Type: String
+    Default: main
+    Description: Branch that triggers the pipeline
+
+  AppStackName:
+    Type: String
+    Default: project4-V2
+    Description: Name of the existing application stack the pipeline deploys
+
+  EnvironmentName:
+    Type: String
+    Default: Dev
+    AllowedValues:
+      - Dev
+      - Test
+      - UAT
+      - Prod
+    Description: Passed to template.yaml EnvironmentName
+
+  KeyPairName:
+    Type: String
+    Default: project4KeyPair
+    Description: EC2 key pair passed to template.yaml (empty = no key pair)
+
+  PipelineName:
+    Type: String
+    Default: project4-iac-pipeline
+    Description: Name of the CodePipeline
+
+  ApprovalEmail:
+    Type: String
+    Default: ''
+    Description: Optional email for manual-approval notifications (confirm the SNS subscription mail)
+
+Conditions:
+  HasApprovalEmail: !Not
+    - !Equals
+      - !Ref ApprovalEmail
+      - ''
+
+Resources:
+  # =========================
+  # Artifact store
+  # =========================
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpirePipelineArtifacts
+            Status: Enabled
+            ExpirationInDays: 30
+      Tags:
+        - Key: Project
+          Value: Project4-CloudFormation
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  ArtifactBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ArtifactBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource:
+              - !GetAtt ArtifactBucket.Arn
+              - !Sub "${ArtifactBucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+
+  # =========================
+  # Approval notifications (optional)
+  # =========================
+  ApprovalTopic:
+    Type: AWS::SNS::Topic
+    Condition: HasApprovalEmail
+    Properties:
+      TopicName: !Sub "${PipelineName}-approval"
+      Subscription:
+        - Endpoint: !Ref ApprovalEmail
+          Protocol: email
+
+  # =========================
+  # CodeBuild - validation
+  # =========================
+  CodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CodeBuildValidate
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${PipelineName}-validate"
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${PipelineName}-validate:*"
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:PutObject
+                Resource: !Sub "${ArtifactBucket.Arn}/*"
+              - Effect: Allow
+                Action:
+                  - s3:GetBucketLocation
+                  - s3:GetBucketAcl
+                Resource: !GetAtt ArtifactBucket.Arn
+              - Effect: Allow
+                Action: cloudformation:ValidateTemplate
+                Resource: '*'
+      Tags:
+        - Key: Project
+          Value: Project4-CloudFormation
+
+  ValidateProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub "${PipelineName}-validate"
+      Description: Lint and validate template.yaml
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: buildspec.yml
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:7.0
+      TimeoutInMinutes: 15
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName: !Sub "/aws/codebuild/${PipelineName}-validate"
+      Tags:
+        - Key: Project
+          Value: Project4-CloudFormation
+
+  # =========================
+  # CloudFormation service role (used to create/update the app stack)
+  # =========================
+  CloudFormationDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudformation.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: DeployProject4Stack
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Services the app template manages. Scoped by service, not by
+              # resource - tighten further once the template stabilises.
+              - Sid: AppServices
+                Effect: Allow
+                Action:
+                  - ec2:*
+                  - elasticloadbalancing:*
+                  - autoscaling:*
+                  - rds:*
+                Resource: '*'
+              - Sid: AmiSsmParameter
+                Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}::parameter/aws/service/ami-amazon-linux-latest/*"
+              - Sid: StackSecrets
+                Effect: Allow
+                Action: secretsmanager:*
+                Resource: !Sub "arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${AppStackName}/*"
+              - Sid: GeneratePassword
+                Effect: Allow
+                Action: secretsmanager:GetRandomPassword
+                Resource: '*'
+              - Sid: StackIamRoles
+                Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:UpdateRole
+                  - iam:UpdateAssumeRolePolicy
+                  - iam:TagRole
+                  - iam:UntagRole
+                  - iam:PutRolePolicy
+                  - iam:GetRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:ListRolePolicies
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:ListAttachedRolePolicies
+                  - iam:ListInstanceProfilesForRole
+                  - iam:PassRole
+                  - iam:CreateInstanceProfile
+                  - iam:DeleteInstanceProfile
+                  - iam:GetInstanceProfile
+                  - iam:AddRoleToInstanceProfile
+                  - iam:RemoveRoleFromInstanceProfile
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AppStackName}-*"
+                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:instance-profile/${AppStackName}-*"
+              - Sid: ServiceLinkedRoles
+                Effect: Allow
+                Action: iam:CreateServiceLinkedRole
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    iam:AWSServiceName:
+                      - autoscaling.amazonaws.com
+                      - elasticloadbalancing.amazonaws.com
+                      - rds.amazonaws.com
+      Tags:
+        - Key: Project
+          Value: Project4-CloudFormation
+
+  # =========================
+  # CodePipeline service role
+  # =========================
+  CodePipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: Project4Pipeline
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:PutObject
+                Resource: !Sub "${ArtifactBucket.Arn}/*"
+              - Effect: Allow
+                Action:
+                  - s3:GetBucketVersioning
+                  - s3:GetBucketLocation
+                  - s3:GetBucketAcl
+                  - s3:ListBucket
+                Resource: !GetAtt ArtifactBucket.Arn
+              - Effect: Allow
+                Action:
+                  - codeconnections:UseConnection
+                  - codestar-connections:UseConnection
+                Resource: !Ref ConnectionArn
+              - Effect: Allow
+                Action:
+                  - codebuild:StartBuild
+                  - codebuild:BatchGetBuilds
+                Resource: !GetAtt ValidateProject.Arn
+              - Effect: Allow
+                Action:
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:DescribeStacks
+                Resource: !Sub "arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AppStackName}/*"
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt CloudFormationDeployRole.Arn
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: cloudformation.amazonaws.com
+              - !If
+                - HasApprovalEmail
+                - Effect: Allow
+                  Action: sns:Publish
+                  Resource: !Ref ApprovalTopic
+                - !Ref AWS::NoValue
+      Tags:
+        - Key: Project
+          Value: Project4-CloudFormation
+
+  # =========================
+  # Pipeline
+  # =========================
+  Pipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Ref PipelineName
+      PipelineType: V2
+      ExecutionMode: QUEUED
+      RoleArn: !GetAtt CodePipelineRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ArtifactBucket
+      Triggers:
+        - ProviderType: CodeStarSourceConnection
+          GitConfiguration:
+            SourceActionName: GitHub
+            Push:
+              - Branches:
+                  Includes:
+                    - !Ref BranchName
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: GitHub
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeStarSourceConnection
+                Version: '1'
+              Configuration:
+                ConnectionArn: !Ref ConnectionArn
+                FullRepositoryId: !Ref FullRepositoryId
+                BranchName: !Ref BranchName
+                OutputArtifactFormat: CODE_ZIP
+              OutputArtifacts:
+                - Name: SourceOutput
+              RunOrder: 1
+
+        - Name: Build
+          Actions:
+            - Name: ValidateTemplate
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: '1'
+              Configuration:
+                ProjectName: !Ref ValidateProject
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: BuildOutput
+              RunOrder: 1
+
+        - Name: Deploy
+          OnFailure:
+            Result: ROLLBACK
+          Actions:
+            - Name: CreateChangeSet
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: '1'
+              Configuration:
+                ActionMode: CHANGE_SET_REPLACE
+                StackName: !Ref AppStackName
+                ChangeSetName: !Sub "${AppStackName}-pipeline-changeset"
+                TemplatePath: BuildOutput::template.yaml
+                Capabilities: CAPABILITY_IAM,CAPABILITY_NAMED_IAM
+                RoleArn: !GetAtt CloudFormationDeployRole.Arn
+                ParameterOverrides: !Sub |
+                  {
+                    "EnvironmentName": "${EnvironmentName}",
+                    "KeyPairName": "${KeyPairName}"
+                  }
+              InputArtifacts:
+                - Name: BuildOutput
+              RunOrder: 1
+
+            - Name: ManualApproval
+              ActionTypeId:
+                Category: Approval
+                Owner: AWS
+                Provider: Manual
+                Version: '1'
+              Configuration:
+                CustomData: !Sub >-
+                  Review change set "${AppStackName}-pipeline-changeset" on stack
+                  ${AppStackName} in the CloudFormation console. Check that no
+                  resource shows Replacement=True unless intended.
+                NotificationArn: !If
+                  - HasApprovalEmail
+                  - !Ref ApprovalTopic
+                  - !Ref AWS::NoValue
+              RunOrder: 2
+
+            - Name: ExecuteChangeSet
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: '1'
+              Configuration:
+                ActionMode: CHANGE_SET_EXECUTE
+                StackName: !Ref AppStackName
+                ChangeSetName: !Sub "${AppStackName}-pipeline-changeset"
+                OutputFileName: stack-outputs.json
+              OutputArtifacts:
+                - Name: DeployOutput
+              RunOrder: 3
+      Tags:
+        - Key: Project
+          Value: Project4-CloudFormation
+        - Key: ManagedBy
+          Value: CloudFormation
+
+Outputs:
+  PipelineName:
+    Description: CodePipeline name
+    Value: !Ref Pipeline
+
+  PipelineConsoleUrl:
+    Description: Pipeline in the AWS console
+    Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/codesuite/codepipeline/pipelines/${Pipeline}/view?region=${AWS::Region}"
+
+  ArtifactBucketName:
+    Description: Pipeline artifact bucket
+    Value: !Ref ArtifactBucket
+
+  CloudFormationDeployRoleArn:
+    Description: Service role CloudFormation uses to deploy the app stack
+    Value: !GetAtt CloudFormationDeployRole.Arn
