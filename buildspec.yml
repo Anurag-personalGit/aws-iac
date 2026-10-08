@@ -1,26 +1,34 @@
 version: 0.2
 
+# Runs in the "Build" stage of project4 pipeline (see pipeline.yaml).
+# Fails the pipeline before any change set is created if the template is invalid.
+
 phases:
   install:
+    runtime-versions:
+      python: 3.12
     commands:
-      - echo "Installing required tools..."
+      - echo "Installing cfn-lint..."
+      - pip install --quiet --upgrade cfn-lint
       - aws --version
-      - echo "CodeBuild environment ready"
+      - cfn-lint --version
 
   pre_build:
     commands:
-      - echo "Starting CloudFormation validation..."
-      - echo "Validating template.yaml"
+      - echo "Linting CloudFormation templates..."
+      # Errors fail the build; warnings are printed but don't block.
+      - cfn-lint --non-zero-exit-code error template.yaml
+      - if [ -f pipeline.yaml ]; then cfn-lint --non-zero-exit-code error pipeline.yaml; fi
 
   build:
     commands:
-      - aws cloudformation validate-template --template-body file://template.yaml
+      - echo "Validating template.yaml with CloudFormation API..."
+      - aws cloudformation validate-template --template-body file://template.yaml > /dev/null
       - echo "CloudFormation template validation successful"
 
   post_build:
     commands:
-      - echo "Build completed successfully"
-      - echo "Preparing CloudFormation deployment artifact"
+      - echo "Build completed on $(date -u +%Y-%m-%dT%H:%M:%SZ) for commit ${CODEBUILD_RESOLVED_SOURCE_VERSION}"
 
 artifacts:
   files:
