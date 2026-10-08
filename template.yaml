@@ -105,20 +105,17 @@ Parameters:
     Description: EC2 Instance Type
 
   KeyPairName:
-    Type: AWS::EC2::KeyPair::KeyName
-    Description: Existing EC2 Key Pair
+    Type: String
+    Default: ''
+    Description: Existing EC2 Key Pair name (leave empty to use SSM Session Manager only)
 
   SSHLocation:
     Type: String
     Default: 0.0.0.0/0
     Description: Allowed SSH CIDR
 
-  DBPassword:
-    Type: String
-    NoEcho: true
-    MinLength: 8
-    MaxLength: 41
-    Description: Master password for RDS MySQL
+  # DBPassword parameter removed - the RDS master password is now generated
+  # by Secrets Manager (Project4DBSecret) and never passes through the pipeline.
 
 Mappings:
   RegionMap:
@@ -131,6 +128,11 @@ Conditions:
   IsProduction: !Equals
     - !Ref EnvironmentName
     - Prod
+
+  HasKeyPair: !Not
+    - !Equals
+      - !Ref KeyPairName
+      - ''
 
 
 Resources:
@@ -461,14 +463,13 @@ Resources:
     Properties:
       Name: !Sub "${AWS::StackName}/database"
       Description: Project 4 RDS database credentials
-      SecretString: !Sub |
-        {
-          "username": "admin",
-          "password": "REPLACE_WITH_YOUR_RDS_PASSWORD",
-          "host": "project4-db.cdsmumsgw993.ap-south-1.rds.amazonaws.com",
-          "port": 3306,
-          "dbname": "project4app"
-        }
+      # Password is generated here; host/port/engine are written into the
+      # same secret by Project4DBSecretAttachment once RDS exists.
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "admin", "dbname": "project4app"}'
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludePunctuation: true
       Tags:
         - Key: Project
           Value: Project4-CloudFormation
@@ -668,7 +669,7 @@ Resources:
                         proxy_set_header X-Forwarded-Proto $scheme;
                     }
                 }
-              mode: '0644'
+              mode: '000644'
               owner: root
               group: root
 
@@ -677,7 +678,7 @@ Resources:
                 [Unit]
                 Requires=project4-flask.service
                 After=project4-flask.service
-              mode: '0644'
+              mode: '000644'
               owner: root
               group: root
 
@@ -716,13 +717,13 @@ Resources:
               command: |
                 nginx -t
 
-            06_start_flask:
-              command: |
-                systemctl enable --now project4-flask
-            
-            07_reload_systemd:
+            06_reload_systemd:
               command: |
                 systemctl daemon-reload
+
+            07_start_flask:
+              command: |
+                systemctl enable --now project4-flask
 
             08_start_nginx:
               command: |
@@ -746,6 +747,11 @@ Resources:
 
         InstanceType: !Ref InstanceType
 
+        KeyName: !If
+          - HasKeyPair
+          - !Ref KeyPairName
+          - !Ref AWS::NoValue
+
         IamInstanceProfile:
           Name: !Ref EC2InstanceProfile
 
@@ -758,14 +764,39 @@ Resources:
         UserData:
           Fn::Base64: !Sub |
             #!/bin/bash
+            # bootstrap-rev: 2
+            # Changes to AWS::CloudFormation::Init metadata alone do NOT create a
+            # new launch template version. Bump bootstrap-rev when you edit the
+            # Init section so the ASG rolls instances and picks up the change.
 
             /opt/aws/bin/cfn-init \
               --stack ${AWS::StackName} \
               --resource Project4LaunchTemplate \
               --region ${AWS::Region}
-    
+
+            /opt/aws/bin/cfn-signal -e $? \
+              --stack ${AWS::StackName} \
+              --resource Project4AutoScalingGroup \
+              --region ${AWS::Region}
+
   Project4AutoScalingGroup:
     Type: AWS::AutoScaling::AutoScalingGroup
+    CreationPolicy:
+      ResourceSignal:
+        Count: 2
+        Timeout: PT15M
+    UpdatePolicy:
+      AutoScalingRollingUpdate:
+        MinInstancesInService: 1
+        MaxBatchSize: 1
+        PauseTime: PT15M
+        WaitOnResourceSignals: true
+        SuspendProcesses:
+          - HealthCheck
+          - ReplaceUnhealthy
+          - AZRebalance
+          - AlarmNotification
+          - ScheduledActions
     Properties:
       MinSize: 2
       MaxSize: 4
@@ -818,7 +849,7 @@ Resources:
       StorageType: gp3
 
       MasterUsername: admin
-      MasterUserPassword: !Ref DBPassword
+      MasterUserPassword: !Sub '{{resolve:secretsmanager:${Project4DBSecret}:SecretString:password}}'
 
       DBSubnetGroupName: !Ref Project4DBSubnetGroup
 
@@ -844,7 +875,24 @@ Resources:
         - Key: ManagedBy
           Value: CloudFormation
 
+  # Writes host / port / engine / dbInstanceIdentifier of the real RDS
+  # instance into Project4DBSecret (replaces the old hardcoded host).
+  Project4DBSecretAttachment:
+    Type: AWS::SecretsManager::SecretTargetAttachment
+    Properties:
+      SecretId: !Ref Project4DBSecret
+      TargetId: !Ref Project4RDS
+      TargetType: AWS::RDS::DBInstance
+
 Outputs:
+  ALBDNSName:
+    Description: Public URL of the application load balancer
+    Value: !Sub "http://${Project4ALB.DNSName}"
+
+  DBSecretArn:
+    Description: Secrets Manager secret holding the RDS credentials
+    Value: !Ref Project4DBSecret
+
   VPCId:
     Description: VPC ID
     Value: !Ref ProjectVPC
@@ -866,7 +914,3 @@ Outputs:
       - !Split
         - ","
         - subnet-aaa,subnet-bbb,subnet-ccc
-  
-  
-
-  
